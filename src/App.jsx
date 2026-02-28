@@ -7,7 +7,8 @@ import {
   AlertTriangle, X, Info, Filter, Calendar, Search, ArrowUpRight,
   User, Hash, MessageCircle, Globe, Tag, FileText, MapPinned, Stethoscope,
   History, Image as ImageIcon, AlignLeft, ReceiptText, Layers, Copy, Check,
-  Sparkles, FileDown
+  Sparkles, FileDown, Download, UserPlus, Save, Plus, Upload, Loader2,
+  ChevronDown, SearchCode
 } from 'lucide-react';
 
 // --- CONFIGURATION SUPABASE ---
@@ -77,17 +78,32 @@ const App = () => {
   const [clients, setClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [reviewClientId, setReviewClientId] = useState(null); 
+  const [financeClientId, setFinanceClientId] = useState(null);
+  const [showAddModal, setShowAddModal] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [uploadingState, setUploadingState] = useState({ type: null, index: null });
   const [notification, setNotification] = useState(null);
-  const [isCopied, setIsCopied] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
   
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
 
+  // Form State for new client
+  const [newClient, setNewClient] = useState({
+    nama_klien: '',
+    paket: '1',
+    jasa_desain: false,
+    whatsapp: '',
+    alamat_kantor: '',
+    posisi: '',
+    penempatan: '',
+    jadwal_tayang: '',
+    caption: '',
+    materi_urls: [],
+    bukti_transfer_url: ''
+  });
+
   const lockFetchRef = useRef(false);
 
-  // Load jspdf scripts
   useEffect(() => {
     const loadScripts = async () => {
       const scripts = [
@@ -129,21 +145,46 @@ const App = () => {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  const handleCopyCaption = (text) => {
-    if (!text) return;
-    const textArea = document.createElement("textarea");
-    textArea.value = text;
-    document.body.appendChild(textArea);
-    textArea.select();
+  const handleFileUpload = async (event, bucket, type, index = null) => {
+    const file = event.target.files[0];
+    if (!file || !supabase) return;
+
+    setUploadingState({ type, index });
+    
     try {
-      document.execCommand('copy');
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
-      showToast("Caption berhasil disalin!");
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const filePath = `${fileName}`;
+
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .upload(filePath, file);
+
+      if (error) throw error;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from(bucket)
+        .getPublicUrl(filePath);
+
+      if (type === 'materi') {
+        const updatedUrls = [...newClient.materi_urls];
+        if (index !== null) {
+          updatedUrls[index] = publicUrl;
+        } else {
+          updatedUrls.push(publicUrl);
+        }
+        setNewClient(prev => ({ ...prev, materi_urls: updatedUrls }));
+      } else if (type === 'bukti') {
+        setNewClient(prev => ({ ...prev, bukti_transfer_url: publicUrl }));
+      }
+
+      showToast("File berhasil diunggah!");
     } catch (err) {
-      showToast("Gagal menyalin text", "error");
+      console.error(err);
+      showToast("Gagal unggah file: " + err.message, "error");
+    } finally {
+      setUploadingState({ type: null, index: null });
     }
-    document.body.removeChild(textArea);
   };
 
   const fetchData = useCallback(async (force = false) => {
@@ -182,7 +223,6 @@ const App = () => {
             tasks: Array.isArray(item.checklist_data) ? item.checklist_data : [],
             status_admin: item.status_admin || 'pending',
             created_at: item.created_at,
-            username_ig: item.username_ig,
             kategori: item.kategori,
             no_wa: item.whatsapp,
             bukti_transfer_url: item.bukti_transfer_url,
@@ -277,6 +317,44 @@ const App = () => {
     }
   };
 
+  const handleAddClient = async (e) => {
+    e.preventDefault();
+    if (!supabase) return;
+    setIsLoading(true);
+
+    try {
+      const { error } = await supabase.from('data_klien').insert([{
+        ...newClient,
+        status_admin: 'pending',
+        created_at: new Date().toISOString()
+      }]);
+
+      if (error) throw error;
+      
+      showToast("Klien baru berhasil ditambahkan!");
+      setShowAddModal(false);
+      setNewClient({
+        nama_klien: '',
+        paket: '1',
+        jasa_desain: false,
+        whatsapp: '',
+        alamat_kantor: '',
+        posisi: '',
+        penempatan: '',
+        jadwal_tayang: '',
+        caption: '',
+        materi_urls: [],
+        bukti_transfer_url: ''
+      });
+      fetchData(true);
+    } catch (err) {
+      showToast("Gagal menambah klien!", "error");
+      console.error(err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const isAllTasksDone = (tasks) => tasks && tasks.length > 0 && tasks.every(t => t.completed);
 
   const filteredClients = useMemo(() => {
@@ -307,6 +385,7 @@ const App = () => {
 
   const selectedClient = clients.find(c => c.id === selectedClientId);
   const reviewClient = clients.find(c => c.id === reviewClientId);
+  const financeClient = clients.find(c => c.id === financeClientId);
   const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
 
   const handleExportPDF = async () => {
@@ -315,7 +394,7 @@ const App = () => {
       return;
     }
     
-    setIsExporting(true);
+    setIsLoading(true);
     try {
       const { jsPDF } = window.jspdf;
       const doc = new jsPDF();
@@ -378,7 +457,7 @@ const App = () => {
       console.error(err);
       showToast("Gagal export PDF", "error");
     } finally {
-      setIsExporting(false);
+      setIsLoading(false);
     }
   };
 
@@ -513,39 +592,6 @@ const App = () => {
                    </div>
                 </div>
               </div>
-
-              <div className="space-y-4">
-                <div className="flex justify-between items-center px-2">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Progress Iklan Aktif</p>
-                  <span className="text-[9px] font-black text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full uppercase tracking-tighter">
-                    {approvedClientsSorted.filter(c => !isAllTasksDone(c.tasks)).length} Iklan
-                  </span>
-                </div>
-                <div className="space-y-3">
-                  {approvedClientsSorted.filter(c => !isAllTasksDone(c.tasks)).length === 0 ? (
-                    <div className="py-8 bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-center">
-                      <p className="text-slate-300 font-bold text-[9px] uppercase tracking-widest italic">Tidak ada progress aktif</p>
-                    </div>
-                  ) : approvedClientsSorted.filter(c => !isAllTasksDone(c.tasks)).map(c => {
-                    const progress = c.tasks.length > 0 ? Math.round((c.tasks.filter(t => t.completed).length / c.tasks.length) * 100) : 0;
-                    return (
-                      <div key={c.id} onClick={() => setSelectedClientId(c.id)} className="p-4 rounded-2xl border bg-white border-slate-100 hover:border-indigo-500 shadow-sm transition-all cursor-pointer active:scale-[0.98]">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="font-bold text-[12px] text-slate-900 truncate pr-4">{c.name}</p>
-                          <p className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 rounded-md">{progress}%</p>
-                        </div>
-                        <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                           <div className="h-full bg-indigo-600 transition-all duration-700" style={{width: `${progress}%`}}></div>
-                        </div>
-                        <div className="flex justify-between items-center mt-2">
-                          <p className="text-[8px] font-bold text-slate-400 uppercase">Paket {c.package}</p>
-                          <p className="text-[8px] font-bold text-slate-400 uppercase">{c.tasks.filter(t => t.completed).length}/{c.tasks.length} Selesai</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
           )}
 
@@ -562,15 +608,26 @@ const App = () => {
                  </div>
               </div>
 
+              <div className="px-2">
+                 <button 
+                  onClick={() => setShowAddModal(true)}
+                  className="w-full py-4 rounded-2xl bg-slate-900 text-white flex items-center justify-center gap-3 shadow-xl active:scale-[0.98] transition-all"
+                 >
+                   <div className="w-7 h-7 bg-white/20 rounded-lg flex items-center justify-center">
+                     <Plus size={16} />
+                   </div>
+                   <span className="text-[11px] font-black uppercase tracking-widest">Tambah Klien Baru</span>
+                 </button>
+              </div>
+
               <div className="space-y-4">
                 <div className="flex items-center justify-between px-2 mb-2">
-                  <h3 className="text-sm font-black tracking-tight text-slate-900 uppercase tracking-widest">Review Approval</h3>
-                  <span className="w-6 h-6 flex items-center justify-center bg-amber-500 text-white rounded-full text-[10px] font-bold">{pendingOrders.length}</span>
+                  <h3 className="text-sm font-black tracking-tight text-slate-900 uppercase tracking-widest">Antrean Approval</h3>
                 </div>
                 
                 {pendingOrders.length === 0 ? (
                   <div className="py-12 bg-slate-50 rounded-3xl border border-dashed border-slate-200 text-center">
-                    <p className="text-slate-300 font-bold text-[10px] uppercase tracking-widest">Antrian Approval Kosong</p>
+                    <p className="text-slate-300 font-bold text-[10px] uppercase tracking-widest">Tidak ada antrean</p>
                   </div>
                 ) : pendingOrders.map(c => (
                   <div 
@@ -587,57 +644,38 @@ const App = () => {
                           <p className="text-[9px] text-slate-400 font-medium uppercase tracking-wider mt-1">Paket {c.package} • {new Date(c.created_at).toLocaleDateString('id-ID', {day:'2-digit', month:'short'})}</p>
                         </div>
                      </div>
-                     <div className="w-8 h-8 bg-slate-50 rounded-lg flex items-center justify-center text-slate-300 group-hover:text-amber-600 group-hover:bg-amber-50 transition-colors">
-                        <ChevronRight size={18} />
-                     </div>
+                     <ChevronRight size={18} className="text-slate-300 group-hover:text-amber-600 transition-colors" />
                   </div>
                 ))}
               </div>
 
-              <div className="space-y-4 pt-4 border-t border-slate-100">
-                <div className="flex items-center justify-between px-2 mb-2">
-                  <h3 className="text-sm font-black tracking-tight text-slate-400 uppercase tracking-widest">Riwayat Approval</h3>
-                  <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md uppercase">History</span>
-                </div>
-                
-                {approvedOrders.length === 0 ? (
-                  <div className="py-8 text-center">
-                    <p className="text-slate-300 font-bold text-[9px] uppercase tracking-widest italic">Belum ada riwayat</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {approvedOrders.map(c => (
-                      <div 
-                        key={c.id} 
-                        onClick={() => setReviewClientId(c.id)}
-                        className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex items-center justify-between opacity-80 hover:opacity-100 transition-all cursor-pointer"
-                      >
+              <div className="space-y-4 pt-4">
+                 <div className="flex items-center gap-2 px-2">
+                    <History size={16} className="text-slate-400" />
+                    <h3 className="text-sm font-black tracking-tight text-slate-400 uppercase tracking-widest">Riwayat Approval</h3>
+                 </div>
+                 <div className="space-y-2">
+                    {approvedOrders.length === 0 ? (
+                       <p className="text-[10px] text-slate-300 italic px-2">Belum ada riwayat</p>
+                    ) : approvedOrders.slice(0, 5).map(c => (
+                      <div key={c.id} onClick={() => setReviewClientId(c.id)} className="bg-slate-50/50 border border-slate-100 rounded-xl p-3 flex items-center justify-between cursor-pointer opacity-70 hover:opacity-100 transition-all">
                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 bg-white text-emerald-500 rounded-lg flex items-center justify-center shadow-sm">
-                               <CheckCircle size={16} />
-                            </div>
-                            <div>
-                               <p className="font-bold text-xs text-slate-700">{c.name}</p>
-                               <p className="text-[8px] text-slate-400 font-medium uppercase tracking-tighter">Approved: {new Date(c.updated_at || c.created_at).toLocaleDateString('id-ID', {day:'2-digit', month:'short'})}</p>
-                            </div>
+                            <CheckCircle2 size={16} className="text-emerald-500" />
+                            <p className="text-xs font-bold text-slate-600">{c.name}</p>
                          </div>
-                         <div className="text-right">
-                            <p className="text-[10px] font-black text-slate-600">Rp {calculatePrice(c.package, c.designService).toLocaleString('id-ID')}</p>
-                         </div>
+                         <p className="text-[9px] font-medium text-slate-400 uppercase">{new Date(c.created_at).toLocaleDateString('id-ID', {day:'2-digit', month:'short'})}</p>
                       </div>
                     ))}
-                  </div>
-                )}
+                 </div>
               </div>
             </div>
           )}
 
           {activeTab === 'tasklist' && (
-            <div className="space-y-6 animate-in fade-in duration-500 pb-10">
+            <div className="space-y-8 animate-in fade-in duration-500 pb-10">
               <div className="space-y-4">
                  <div className="flex justify-between items-center px-2 mb-1">
-                    <h3 className="text-sm font-black tracking-widest uppercase text-slate-900">Task List Aktif</h3>
-                    <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-2.5 py-1 rounded-full uppercase">{statsOngoing} On Progress</span>
+                    <h3 className="text-sm font-black tracking-widest uppercase text-slate-900">Iklan Berjalan</h3>
                  </div>
                  <div className="space-y-3">
                     {approvedClientsSorted.filter(c => !isAllTasksDone(c.tasks)).length === 0 ? (
@@ -668,27 +706,25 @@ const App = () => {
               </div>
 
               <div className="space-y-4 pt-4">
-                 <div className="flex justify-between items-center px-2 mb-1">
-                    <h3 className="text-sm font-black tracking-widest uppercase text-slate-400">Arsip Task</h3>
-                    <div className="flex items-center gap-1 text-[9px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full uppercase">
-                       <CheckCircle size={10} /> {statsCompleted} Selesai
-                    </div>
+                 <div className="flex items-center gap-2 px-2">
+                    <History size={16} className="text-slate-400" />
+                    <h3 className="text-sm font-black tracking-tight text-slate-400 uppercase tracking-widest">Riwayat Selesai (Klik Edit)</h3>
                  </div>
-                 <div className="space-y-3">
+                 <div className="space-y-2">
                     {approvedClientsSorted.filter(c => isAllTasksDone(c.tasks)).length === 0 ? (
-                      <div className="py-10 text-center">
-                         <p className="text-slate-300 font-bold text-[9px] uppercase tracking-widest italic">Belum ada task selesai</p>
-                      </div>
+                       <p className="text-[10px] text-slate-300 italic px-2">Belum ada iklan selesai</p>
                     ) : approvedClientsSorted.filter(c => isAllTasksDone(c.tasks)).map(c => (
-                      <div key={c.id} onClick={() => setReviewClientId(c.id)} className="p-4 rounded-2xl border bg-slate-50 border-slate-100 opacity-70 hover:opacity-100 transition-all cursor-pointer flex items-center justify-between group">
-                        <div className="flex items-center gap-3">
-                           <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center"><CheckCircle2 size={20} /></div>
-                           <div>
-                              <p className="font-bold text-sm text-slate-600 group-hover:text-slate-900">{c.name}</p>
-                              <p className="text-[8px] text-slate-400 font-medium uppercase mt-0.5">{new Date(c.created_at).toLocaleDateString('id-ID', {day:'2-digit', month:'short'})} • Paket {c.package}</p>
-                           </div>
-                        </div>
-                        <div className="w-7 h-7 rounded-full bg-white flex items-center justify-center text-slate-300 group-hover:text-indigo-600 shadow-sm"><Eye size={12} /></div>
+                      <div key={c.id} onClick={() => setSelectedClientId(c.id)} className="bg-slate-50/50 border border-slate-100 rounded-xl p-3 flex items-center justify-between opacity-80 hover:opacity-100 cursor-pointer transition-all">
+                         <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center text-emerald-600">
+                               <CheckCircle2 size={16} />
+                            </div>
+                            <div>
+                               <p className="text-xs font-bold text-slate-600 leading-none mb-1">{c.name}</p>
+                               <p className="text-[8px] font-black text-emerald-500 uppercase tracking-widest">Sudah Tayang</p>
+                            </div>
+                         </div>
+                         <p className="text-[9px] font-medium text-slate-400 uppercase">{new Date(c.created_at).toLocaleDateString('id-ID', {day:'2-digit', month:'short'})}</p>
                       </div>
                     ))}
                  </div>
@@ -698,74 +734,56 @@ const App = () => {
 
           {activeTab === 'finance' && (
             <div className="space-y-8 animate-in fade-in duration-500 pb-10">
-              <div className="space-y-4">
-                <div className="flex justify-between items-center px-2">
+               <div className="flex justify-between items-center px-2">
                    <h3 className="text-lg font-black tracking-tight">Finance Report</h3>
-                   <button 
-                    onClick={handleExportPDF} 
-                    disabled={isExporting || approvedOrders.length === 0}
-                    className="flex items-center gap-2 bg-indigo-50 text-indigo-700 px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest border border-indigo-100 active:scale-95 transition-all disabled:opacity-50"
-                   >
-                     {isExporting ? <RefreshCw size={14} className="animate-spin" /> : <FileDown size={14} />}
+                   <button onClick={handleExportPDF} disabled={isLoading} className="flex items-center gap-2 bg-indigo-50 text-indigo-700 px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest border border-indigo-100 active:scale-95 transition-all disabled:opacity-50">
+                     {isLoading ? <RefreshCw size={14} className="animate-spin" /> : <FileDown size={14} />}
                      Export PDF
                    </button>
                 </div>
-                <div className="bg-indigo-600 p-8 rounded-[2.5rem] shadow-xl shadow-indigo-100 text-center relative overflow-hidden">
-                  <div className="relative z-10">
-                    <p className="text-indigo-200 text-[9px] font-bold uppercase tracking-[0.2em] mb-1">Total Pemasukan ({monthNames[filterMonth]})</p>
-                    <h4 className="text-3xl font-black tracking-tighter text-white mb-6">Rp {totalOmzet.toLocaleString('id-ID')}</h4>
-                    <div className="w-full grid grid-cols-3 gap-2">
-                      {[1,2,3].map(pkg => (
-                        <div key={pkg} className="bg-white/10 backdrop-blur-md rounded-xl py-3 border border-white/10">
-                            <p className="text-[7px] font-medium text-indigo-200 uppercase mb-0.5">Pkt {pkg}</p>
-                            <p className="text-sm font-black text-white">{approvedOrders.filter(c => Number(c.package) === pkg).length}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
 
-              <div className="space-y-4">
-                <div className="flex items-center justify-between px-2 mb-2">
-                  <h3 className="text-sm font-black tracking-tight text-slate-900 uppercase tracking-widest">Daftar Transaksi</h3>
-                  <div className="flex items-center gap-1.5 text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full">
-                    <ReceiptText size={12} />
-                    <span className="text-[9px] font-bold uppercase">{approvedOrders.length} Valid</span>
-                  </div>
+                <div className="bg-indigo-600 p-8 rounded-[2.5rem] shadow-xl shadow-indigo-100 text-center text-white relative overflow-hidden">
+                    <div className="absolute top-0 right-0 p-4 opacity-10"><Wallet size={120} /></div>
+                    <div className="relative z-10">
+                      <p className="text-indigo-200 text-[9px] font-bold uppercase tracking-[0.2em] mb-1">Total Pemasukan ({monthNames[filterMonth]})</p>
+                      <h4 className="text-3xl font-black tracking-tighter mb-4">Rp {totalOmzet.toLocaleString('id-ID')}</h4>
+                    </div>
                 </div>
-                {approvedOrders.length === 0 ? (
-                  <div className="py-12 bg-slate-50 rounded-3xl border border-dashed border-slate-200 text-center">
-                    <p className="text-slate-300 font-bold text-[10px] uppercase tracking-widest">Belum ada transaksi</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {approvedOrders.map(c => (
-                      <div key={c.id} className="bg-white border border-slate-100 rounded-2xl p-4 flex items-center justify-between shadow-sm">
-                         <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center">
-                               <CheckCircle size={18} />
-                            </div>
-                            <div>
-                               <p className="font-bold text-sm text-slate-800">{c.name}</p>
-                               <div className="flex items-center gap-2 mt-0.5">
-                                 <p className="text-[8px] text-slate-400 font-medium uppercase tracking-tighter">{new Date(c.created_at).toLocaleDateString('id-ID', {day:'2-digit', month:'long'})}</p>
-                                 <span className="w-1 h-1 bg-slate-200 rounded-full"></span>
-                                 <p className="text-[8px] font-bold text-indigo-500 uppercase">Paket {c.package}</p>
-                               </div>
-                            </div>
-                         </div>
-                         <div className="text-right">
-                            <p className="text-sm font-black text-slate-900">Rp {calculatePrice(c.package, c.designService).toLocaleString('id-ID')}</p>
-                            {c.designService && (
-                               <p className="text-[7px] font-bold text-amber-500 uppercase tracking-tight">+ Desain</p>
-                            )}
-                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+
+                <div className="space-y-4 pt-4">
+                   <div className="flex items-center gap-2 px-2">
+                      <History size={16} className="text-slate-400" />
+                      <h3 className="text-sm font-black tracking-tight text-slate-900 uppercase tracking-widest">Riwayat Transaksi (Klik Bukti)</h3>
+                   </div>
+                   
+                   <div className="space-y-2">
+                      {approvedClientsSorted.length === 0 ? (
+                         <div className="p-8 text-center text-slate-300 italic text-xs tracking-widest">Belum ada transaksi bulan ini</div>
+                      ) : approvedClientsSorted.map(c => {
+                        const price = calculatePrice(c.package, c.designService);
+                        return (
+                          <div key={c.id} onClick={() => setFinanceClientId(c.id)} className="bg-white border border-slate-100 rounded-xl p-3 flex items-center justify-between hover:border-indigo-400 transition-all cursor-pointer active:scale-95 shadow-sm">
+                             <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600">
+                                   <ReceiptText size={16} />
+                                </div>
+                                <div>
+                                   <p className="text-xs font-black text-slate-700 mb-0.5">{c.name}</p>
+                                   <div className="flex items-center gap-1.5">
+                                      <span className="text-[7px] font-black px-1 py-0.5 bg-indigo-100/50 text-indigo-600 rounded uppercase tracking-widest">P{c.package}</span>
+                                      <span className="text-[8px] font-medium text-slate-400 uppercase">{new Date(c.created_at).toLocaleDateString('id-ID', {day:'2-digit', month:'short'})}</span>
+                                   </div>
+                                </div>
+                             </div>
+                             <div className="text-right">
+                                <p className="text-xs font-black text-emerald-600 mb-0.5">+Rp {price.toLocaleString('id-ID')}</p>
+                                <p className="text-[7px] font-black text-emerald-400 uppercase tracking-widest">Klik Bukti</p>
+                             </div>
+                          </div>
+                        );
+                      })}
+                   </div>
+                </div>
             </div>
           )}
         </main>
@@ -776,6 +794,111 @@ const App = () => {
           <NavItem active={activeTab === 'tasklist'} onClick={() => setActiveTab('tasklist')} icon={<CalendarDays size={20}/>} label="Task List" />
           <NavItem active={activeTab === 'finance'} onClick={() => setActiveTab('finance')} icon={<Wallet size={20}/>} label="Finance" />
         </nav>
+
+        {/* Modal: Add New Client */}
+        {showAddModal && (
+          <div className="fixed inset-0 z-[120] flex items-end justify-center p-0">
+             <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-md animate-in fade-in duration-300" onClick={() => setShowAddModal(false)}></div>
+             <div className="relative bg-white w-full max-w-md rounded-t-[3rem] p-8 shadow-2xl max-h-[95vh] flex flex-col animate-in slide-in-from-bottom duration-500 overflow-hidden">
+                <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mb-8 shrink-0"></div>
+                
+                <div className="flex items-start justify-between mb-6 shrink-0">
+                   <div>
+                      <p className="text-indigo-500 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Administrator Tool</p>
+                      <h3 className="text-2xl font-black text-slate-900 tracking-tighter">Tambah Klien Baru</h3>
+                   </div>
+                   <button onClick={() => setShowAddModal(false)} className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-400 active:scale-90 transition-all"><X size={20}/></button>
+                </div>
+
+                <form onSubmit={handleAddClient} className="flex-1 overflow-y-auto no-scrollbar space-y-6 pb-6 px-1">
+                   <div className="space-y-4 bg-slate-50 rounded-[2rem] p-6 border border-slate-100">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nama Perusahaan / Klien</label>
+                        <input required type="text" placeholder="Contoh: PT. Maju Bersama" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-xs font-bold focus:ring-4 focus:ring-indigo-500/10 outline-none" value={newClient.nama_klien} onChange={(e) => setNewClient({...newClient, nama_klien: e.target.value})} />
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Pilih Paket</label>
+                          <select className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-xs font-bold outline-none" value={newClient.paket} onChange={(e) => setNewClient({...newClient, paket: e.target.value})}>
+                            <option value="1">Paket 1 (Rp 50rb)</option>
+                            <option value="2">Paket 2 (Rp 100rb)</option>
+                            <option value="3">Paket 3 (Rp 150rb)</option>
+                          </select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Jasa Desain</label>
+                          <div onClick={() => setNewClient({...newClient, jasa_desain: !newClient.jasa_desain})} className={`w-full h-[46px] border rounded-xl flex items-center justify-center cursor-pointer transition-all ${newClient.jasa_desain ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-400'}`}>
+                            <span className="text-[10px] font-black uppercase tracking-widest">{newClient.jasa_desain ? 'Ya (+20rb)' : 'Tidak'}</span>
+                          </div>
+                        </div>
+                      </div>
+                   </div>
+
+                   <div className="space-y-4">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Informasi Lowongan</p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input type="text" placeholder="Posisi" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs font-bold outline-none" value={newClient.posisi} onChange={e => setNewClient({...newClient, posisi: e.target.value})} />
+                        <input type="text" placeholder="Penempatan" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs font-bold outline-none" value={newClient.penempatan} onChange={e => setNewClient({...newClient, penempatan: e.target.value})} />
+                      </div>
+                      <input type="text" placeholder="Alamat Lengkap Kantor" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs font-bold outline-none" value={newClient.alamat_kantor} onChange={e => setNewClient({...newClient, alamat_kantor: e.target.value})} />
+                      <input type="text" placeholder="Nomor WhatsApp" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs font-bold outline-none" value={newClient.whatsapp} onChange={e => setNewClient({...newClient, whatsapp: e.target.value})} />
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Jadwal Tayang</label>
+                        <input type="datetime-local" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs font-bold outline-none" value={newClient.jadwal_tayang} onChange={e => setNewClient({...newClient, jadwal_tayang: e.target.value})} />
+                      </div>
+                   </div>
+
+                   <div className="space-y-4">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Materi Posting</p>
+                      <div className="grid grid-cols-1 gap-3">
+                         {newClient.materi_urls.map((url, idx) => (
+                           <div key={idx} className="flex items-center gap-2 p-3 bg-indigo-50/50 rounded-xl border border-indigo-100">
+                              <ImageIcon size={16} className="text-indigo-600" />
+                              <span className="flex-1 text-[10px] font-bold text-indigo-700 truncate">{url.split('/').pop()}</span>
+                              <button type="button" onClick={() => setNewClient(prev => ({...prev, materi_urls: prev.materi_urls.filter((_, i) => i !== idx)}))} className="text-red-500"><X size={14}/></button>
+                           </div>
+                         ))}
+                         <label className={`w-full border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all ${uploadingState.type === 'materi' ? 'bg-slate-50 border-slate-300' : 'hover:bg-indigo-50 border-slate-200 hover:border-indigo-400'}`}>
+                            {uploadingState.type === 'materi' ? <Loader2 size={24} className="text-indigo-600 animate-spin mb-2" /> : <Upload size={24} className="text-slate-400 mb-2" />}
+                            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{uploadingState.type === 'materi' ? 'Mengunggah...' : 'Pilih Materi Posting'}</span>
+                            <input type="file" className="hidden" accept="image/*,video/*" onChange={(e) => handleFileUpload(e, 'materi-posting', 'materi')} disabled={uploadingState.type !== null} />
+                         </label>
+                      </div>
+                   </div>
+
+                   <div className="space-y-4">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Bukti Transfer</p>
+                      {newClient.bukti_transfer_url ? (
+                        <div className="flex items-center gap-2 p-3 bg-emerald-50 rounded-xl border border-emerald-100 mb-2">
+                           <CheckCircle size={16} className="text-emerald-600" />
+                           <span className="flex-1 text-[10px] font-bold text-emerald-700 truncate">Bukti berhasil diunggah</span>
+                           <button type="button" onClick={() => setNewClient({...newClient, bukti_transfer_url: ''})} className="text-red-500"><X size={14}/></button>
+                        </div>
+                      ) : (
+                        <label className={`w-full border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all ${uploadingState.type === 'bukti' ? 'bg-slate-50 border-slate-300' : 'hover:bg-emerald-50 border-slate-200 hover:border-emerald-400'}`}>
+                           {uploadingState.type === 'bukti' ? <Loader2 size={24} className="text-emerald-600 animate-spin mb-2" /> : <Upload size={24} className="text-slate-400 mb-2" />}
+                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{uploadingState.type === 'bukti' ? 'Mengunggah...' : 'Pilih Bukti Transfer'}</span>
+                           <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'bukti-transfer', 'bukti')} disabled={uploadingState.type !== null} />
+                        </label>
+                      )}
+                   </div>
+
+                   <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Caption Iklan</label>
+                      <textarea rows="4" placeholder="Tulis caption di sini..." className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-4 py-4 text-xs font-medium outline-none resize-none" value={newClient.caption} onChange={e => setNewClient({...newClient, caption: e.target.value})}></textarea>
+                   </div>
+
+                   <div className="pt-4 shrink-0">
+                      <button type="submit" disabled={isLoading || uploadingState.type !== null} className="w-full py-5 rounded-2xl bg-indigo-600 text-white font-black text-xs uppercase tracking-[0.2em] shadow-2xl active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50">
+                         {isLoading ? <RefreshCw size={16} className="animate-spin" /> : <Save size={18} />}
+                         Simpan Data Klien
+                      </button>
+                   </div>
+                </form>
+             </div>
+          </div>
+        )}
 
         {reviewClient && (
           <div className="fixed inset-0 z-[110] flex items-end justify-center p-0">
@@ -818,105 +941,118 @@ const App = () => {
                    <div className="space-y-4">
                       <div className="flex items-center justify-between px-1">
                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Materi Iklan</p>
-                        {reviewClient.materi_iklan_list?.length > 1 && (
-                          <span className="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full uppercase tracking-tighter flex items-center gap-1">
-                             <Layers size={10} /> {reviewClient.materi_iklan_list.length} Slide
-                          </span>
-                        )}
                       </div>
-                      <div className="bg-slate-50 border border-slate-100 rounded-[2rem] p-6 space-y-6">
-                         <div className="space-y-3">
-                           <div className="flex items-center gap-2 text-indigo-600 mb-1">
-                             <ImageIcon size={14} />
-                             <span className="text-[9px] font-black uppercase tracking-widest">Link File</span>
-                           </div>
-                           {reviewClient.materi_iklan_list && reviewClient.materi_iklan_list.length > 0 ? (
-                             <div className="space-y-2">
-                               {reviewClient.materi_iklan_list.map((url, idx) => (
-                                 <a key={idx} href={url} target="_blank" rel="noreferrer" className="flex items-center justify-between bg-white p-3 rounded-xl border border-slate-200 hover:border-indigo-500 transition-all group shadow-sm active:scale-[0.98]">
-                                   <div className="flex items-center gap-2 overflow-hidden">
-                                     <span className="w-5 h-5 flex items-center justify-center bg-slate-50 text-[9px] font-black text-slate-400 rounded-md border border-slate-100 group-hover:bg-indigo-600 group-hover:text-white transition-colors">{idx + 1}</span>
-                                     <span className="text-[10px] font-bold text-slate-600 truncate max-w-[180px]">{url}</span>
-                                   </div>
-                                   <ExternalLink size={14} className="text-slate-300 group-hover:text-indigo-600 shrink-0" />
-                                 </a>
-                               ))}
+                      <div className="bg-slate-50 border border-slate-100 rounded-[2rem] p-6 space-y-4">
+                         {reviewClient.materi_iklan_list && reviewClient.materi_iklan_list.length > 0 ? (
+                           reviewClient.materi_iklan_list.map((url, idx) => (
+                             <div key={idx} className="flex items-center justify-between bg-white p-3 rounded-xl border border-slate-200 shadow-sm transition-all group">
+                                <span className="text-[10px] font-bold text-slate-600 truncate flex-1">{url.split('/').pop()}</span>
+                                <div className="flex items-center gap-2">
+                                   <a href={url} target="_blank" rel="noreferrer" className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><ExternalLink size={14} /></a>
+                                </div>
                              </div>
-                           ) : (
-                             <p className="text-[10px] text-slate-400 italic font-medium px-1">Tidak ada materi</p>
-                           )}
-                         </div>
-
-                         <div className="space-y-2">
-                           <div className="flex items-center justify-between gap-2 text-indigo-600 mb-1">
-                             <div className="flex items-center gap-2">
-                                <AlignLeft size={14} />
-                                <span className="text-[9px] font-black uppercase tracking-widest">Caption</span>
-                             </div>
-                             <button 
-                                onClick={() => handleCopyCaption(reviewClient.caption)}
-                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all ${isCopied ? 'bg-emerald-500 text-white shadow-lg' : 'bg-white text-indigo-600 border border-slate-100 shadow-sm active:scale-90'}`}
-                             >
-                                {isCopied ? <Check size={10}/> : <Copy size={10}/>}
-                                {isCopied ? 'Tersalin' : 'Salin'}
-                             </button>
-                           </div>
-                           <div className="bg-white p-4 rounded-xl border border-slate-200 min-h-[80px]">
-                             <p className="text-[11px] font-medium text-slate-700 leading-relaxed whitespace-pre-wrap italic">
-                               {reviewClient.caption || "Default Caption"}
-                             </p>
-                           </div>
-                         </div>
+                           ))
+                         ) : <p className="text-[10px] text-slate-400 italic">Tidak ada materi</p>}
                       </div>
                    </div>
 
                    <div className="space-y-4">
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Bukti Transfer</p>
                       <div className="relative group overflow-hidden rounded-[2rem] border-4 border-slate-50 shadow-inner bg-slate-50">
-                         <img 
-                           src={reviewClient.bukti_transfer_url} 
-                           alt="Bukti Transfer" 
-                           className="w-full h-56 object-contain p-2 group-hover:scale-110 transition-transform duration-700"
-                           onError={(e) => { e.target.src = "https://placehold.co/600x400/f1f5f9/94a3b8?text=Bukti+Tidak+Tersedia"; }}
-                         />
-                         <a href={reviewClient.bukti_transfer_url} target="_blank" rel="noreferrer" className="absolute inset-0 bg-indigo-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white">
-                            <ExternalLink size={24} className="mb-2" />
-                            <span className="text-[10px] font-bold uppercase tracking-widest">Buka Gambar</span>
-                         </a>
+                         {reviewClient.bukti_transfer_url ? (
+                           <>
+                             <img src={reviewClient.bukti_transfer_url} alt="Bukti Transfer" className="w-full h-56 object-contain p-2" />
+                             <div className="absolute top-4 right-4 flex gap-2">
+                                <a href={reviewClient.bukti_transfer_url} target="_blank" rel="noreferrer" className="w-10 h-10 bg-white text-slate-900 rounded-full flex items-center justify-center shadow-lg"><ExternalLink size={18} /></a>
+                             </div>
+                           </>
+                         ) : <div className="w-full h-32 flex items-center justify-center"><p className="text-[10px] text-slate-300">Belum ada bukti</p></div>}
                       </div>
                    </div>
                 </div>
 
                 <div className="pt-6 shrink-0 flex flex-col gap-3 bg-white">
                    {reviewClient.status_admin === 'pending' ? (
-                     <button onClick={() => approveOrder(reviewClient.id, reviewClient.package)} disabled={isLoading} className="w-full py-5 rounded-2xl bg-indigo-600 text-white font-black text-xs uppercase tracking-[0.2em] shadow-2xl shadow-indigo-200 active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50">
+                     <button onClick={() => approveOrder(reviewClient.id, reviewClient.package)} disabled={isLoading} className="w-full py-5 rounded-2xl bg-indigo-600 text-white font-black text-xs uppercase tracking-[0.2em] shadow-2xl active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50">
                        {isLoading ? <RefreshCw size={16} className="animate-spin" /> : <ShieldCheck size={18} />}
                        Approve & Generate Tasks
                      </button>
-                   ) : (
-                     <button onClick={() => setReviewClientId(null)} className="w-full py-5 rounded-2xl bg-slate-900 text-white font-black text-xs uppercase tracking-[0.2em] shadow-xl active:scale-[0.98] transition-all shrink-0">Close Details</button>
-                   )}
+                   ) : <button onClick={() => setReviewClientId(null)} className="w-full py-5 rounded-2xl bg-slate-900 text-white font-black text-xs uppercase tracking-[0.2em] shadow-xl active:scale-[0.98] transition-all shrink-0">Close Details</button>}
+                </div>
+             </div>
+          </div>
+        )}
+
+        {/* Modal: Finance Detail & Bukti Transfer */}
+        {financeClient && (
+          <div className="fixed inset-0 z-[110] flex items-end justify-center p-0">
+             <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-md animate-in fade-in duration-300" onClick={() => setFinanceClientId(null)}></div>
+             <div className="relative bg-white w-full max-w-md rounded-t-[3rem] p-8 shadow-2xl max-h-[90vh] flex flex-col animate-in slide-in-from-bottom duration-500 overflow-hidden">
+                <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mb-8 shrink-0"></div>
+                
+                <div className="flex items-start justify-between mb-6 shrink-0">
+                   <div>
+                      <p className="text-emerald-500 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Transaction Verified</p>
+                      <h3 className="text-2xl font-black text-slate-900 tracking-tighter">Bukti Pembayaran</h3>
+                      <p className="text-xs font-bold text-slate-400 mt-1">{financeClient.name}</p>
+                   </div>
+                   <button onClick={() => setFinanceClientId(null)} className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-400 active:scale-90 transition-all"><X size={20}/></button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto no-scrollbar space-y-6 pb-6">
+                   <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex items-center justify-between">
+                      <div>
+                         <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Pemasukan</p>
+                         <p className="text-2xl font-black text-emerald-600">Rp {calculatePrice(financeClient.package, financeClient.designService).toLocaleString('id-ID')}</p>
+                      </div>
+                      <div className="text-right">
+                         <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Metode</p>
+                         <p className="text-xs font-black text-slate-700">Transfer Bank</p>
+                      </div>
+                   </div>
+
+                   <div className="space-y-4">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Lampiran Gambar</p>
+                      <div className="relative rounded-[2rem] border-4 border-slate-50 bg-slate-100 overflow-hidden min-h-[300px] flex items-center justify-center">
+                         {financeClient.bukti_transfer_url ? (
+                           <>
+                             <img src={financeClient.bukti_transfer_url} alt="Bukti Transfer" className="w-full h-full object-contain p-2" />
+                             <a href={financeClient.bukti_transfer_url} target="_blank" rel="noreferrer" className="absolute bottom-4 right-4 w-12 h-12 bg-white/90 backdrop-blur shadow-xl rounded-full flex items-center justify-center text-indigo-600"><ExternalLink size={20} /></a>
+                           </>
+                         ) : <div className="text-center p-10"><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Tidak ada gambar bukti</p></div>}
+                      </div>
+                   </div>
+
+                   <div className="bg-indigo-50/50 rounded-2xl p-5 border border-indigo-100/50">
+                      <div className="flex items-center gap-3">
+                         <Info size={16} className="text-indigo-600" />
+                         <p className="text-[10px] font-bold text-indigo-700">Transaksi ini telah divalidasi oleh sistem pada {new Date(financeClient.created_at).toLocaleDateString('id-ID')}.</p>
+                      </div>
+                   </div>
+                </div>
+
+                <div className="pt-4 shrink-0">
+                   <button onClick={() => setFinanceClientId(null)} className="w-full py-5 rounded-2xl bg-slate-900 text-white font-black text-xs uppercase tracking-[0.2em] shadow-xl active:scale-[0.98] transition-all">Selesai</button>
                 </div>
              </div>
           </div>
         )}
 
         {selectedClientId && (
-          <div className="fixed inset-0 z-[100] flex items-end justify-center p-0">
+          <div className="fixed inset-0 z-[120] flex items-end justify-center p-0">
             <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-300" onClick={() => setSelectedClientId(null)}></div>
             <div className="relative bg-white w-full max-w-md rounded-t-[2.5rem] p-8 shadow-2xl max-h-[90vh] flex flex-col animate-in slide-in-from-bottom duration-400">
               <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mb-8 shrink-0"></div>
               <div className="flex items-start justify-between mb-8 shrink-0">
                 <div className="flex-1 pr-6">
+                  <p className="text-indigo-500 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Execution Mode</p>
                   <h3 className="text-2xl font-black text-slate-900 tracking-tighter leading-tight">{selectedClient?.name}</h3>
-                  <div className="flex items-center gap-2 mt-2">
-                    <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[9px] font-bold uppercase tracking-widest border border-indigo-100">Task List Checklist</span>
-                  </div>
                 </div>
                 <button onClick={() => setSelectedClientId(null)} className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-400 active:scale-90 transition-all"><X size={20}/></button>
               </div>
+              
               <div className="flex-1 overflow-y-auto no-scrollbar space-y-3 mb-8">
-                {selectedClient?.tasks?.map(t => (
+                {selectedClient?.tasks?.length > 0 ? selectedClient?.tasks?.map(t => (
                   <label key={t.id} className={`flex items-center gap-4 p-5 rounded-2xl border transition-all cursor-pointer group ${t.completed ? 'bg-emerald-50/30 border-emerald-100/50' : 'bg-white border-slate-100 hover:border-indigo-200'}`}>
                     <input type="checkbox" className="hidden" checked={t.completed} onChange={() => toggleTask(selectedClient.id, t.id)} />
                     <div className={`transition-all duration-300 ${t.completed ? 'text-emerald-500' : 'text-slate-200'}`}>
@@ -924,9 +1060,13 @@ const App = () => {
                     </div>
                     <span className={`font-bold text-sm flex-1 tracking-tight ${t.completed ? 'text-emerald-900/40 line-through' : 'text-slate-700'}`}>{t.label}</span>
                   </label>
-                ))}
+                )) : (
+                   <div className="text-center py-10">
+                      <p className="text-xs text-slate-400 italic">Memuat tugas...</p>
+                   </div>
+                )}
               </div>
-              <button onClick={() => setSelectedClientId(null)} className="w-full py-5 rounded-2xl bg-slate-900 text-white font-black text-xs uppercase tracking-[0.2em] shadow-xl active:scale-[0.98] transition-all shrink-0">Simpan Progress</button>
+              <button onClick={() => setSelectedClientId(null)} className="w-full py-5 rounded-2xl bg-indigo-600 text-white font-black text-xs uppercase tracking-[0.2em] shadow-xl active:scale-[0.98] transition-all shrink-0">Simpan & Tutup</button>
             </div>
           </div>
         )}
@@ -965,4 +1105,3 @@ const NavItem = ({ active, onClick, icon, label }) => (
 );
 
 export default App;
-
